@@ -1,0 +1,794 @@
+[
+  {
+    "id": "tab_logica",
+    "type": "tab",
+    "label": "Invernadero - Lógica",
+    "disabled": false,
+    "info": "Proyecto Final Taller IoT — Invernadero automatizado (simulado).\n\nSensores por MQTT → reglas automáticas → actuadores por MQTT.\nTodo se guarda en MariaDB. Las alertas salen por HTTP (webhook) a n8n.\nAPI HTTP: GET /invernadero/estado y GET /invernadero/resumen"
+  },
+  {
+    "id": "broker_mosquitto",
+    "type": "mqtt-broker",
+    "name": "Mosquitto local",
+    "broker": "localhost",
+    "port": "1883",
+    "clientid": "",
+    "autoConnect": true,
+    "usetls": false,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true,
+    "birthTopic": "",
+    "birthQos": "0",
+    "birthRetain": "false",
+    "birthPayload": "",
+    "birthMsg": {},
+    "closeTopic": "",
+    "closeQos": "0",
+    "closeRetain": "false",
+    "closePayload": "",
+    "closeMsg": {},
+    "willTopic": "",
+    "willQos": "0",
+    "willRetain": "false",
+    "willPayload": "",
+    "willMsg": {},
+    "userProps": "",
+    "sessionExpiry": ""
+  },
+  {
+    "id": "db_invernadero",
+    "type": "MySQLdatabase",
+    "name": "MariaDB invernadero",
+    "host": "127.0.0.1",
+    "port": "3306",
+    "db": "invernadero",
+    "tz": "",
+    "charset": "UTF8MB4",
+    "credentials": {
+      "user": "nodered",
+      "password": "nodered123"
+    }
+  },
+  {
+    "id": "c_sensores",
+    "type": "comment",
+    "z": "tab_logica",
+    "name": "1) Lecturas de sensores → base de datos + reglas + alertas",
+    "info": "El simulador publica en invernadero/sensores/<sensor> cada 5 s.",
+    "x": 270,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "in_sensores",
+    "type": "mqtt in",
+    "z": "tab_logica",
+    "name": "Sensores",
+    "topic": "invernadero/sensores/+",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "broker_mosquitto",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 110,
+    "y": 100,
+    "wires": [
+      [
+        "fn_normalizar"
+      ]
+    ]
+  },
+  {
+    "id": "fn_normalizar",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Normalizar lectura",
+    "func": "// Tópico: invernadero/sensores/<sensor>   —   payload: número como texto\nconst sensor = msg.topic.split('/').pop();\nconst valor = parseFloat(msg.payload);\nif (isNaN(valor)) {\n    node.warn(`Lectura inválida en ${msg.topic}: ${msg.payload}`);\n    return null;\n}\n// Última lectura de cada sensor (la usa la API GET /invernadero/estado)\nconst lecturas = flow.get('lecturas') || {};\nlecturas[sensor] = { valor: valor, fecha: new Date().toISOString() };\nflow.set('lecturas', lecturas);\n\nmsg.sensor = sensor;\nmsg.payload = valor;\nnode.status({ fill: 'green', shape: 'dot', text: `${sensor}: ${valor}` });\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 320,
+    "y": 100,
+    "wires": [
+      [
+        "fn_sql_lectura",
+        "fn_reglas",
+        "fn_detectar"
+      ]
+    ]
+  },
+  {
+    "id": "fn_sql_lectura",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "SQL: guardar lectura",
+    "func": "msg.topic = 'INSERT INTO lecturas (sensor, valor) VALUES (?, ?)';\nmsg.payload = [msg.sensor, msg.payload];\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 570,
+    "y": 60,
+    "wires": [
+      [
+        "db_insert"
+      ]
+    ]
+  },
+  {
+    "id": "db_insert",
+    "type": "mysql",
+    "z": "tab_logica",
+    "mydb": "db_invernadero",
+    "name": "MariaDB (inserts)",
+    "x": 820,
+    "y": 60,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "fn_reglas",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Reglas automáticas",
+    "func": "// Reglas con histéresis: el umbral para PRENDER es distinto al de APAGAR,\n// así el actuador no se prende y apaga a cada rato.\nif ((flow.get('modo') || 'auto') !== 'auto') return null;   // en modo manual no decide\n\nconst cfg = Object.assign(\n    { suelo_min: 30, suelo_max: 60, temp_max: 32, temp_ok: 28 },\n    flow.get('config') || {}\n);\nconst act = flow.get('actuadores') || { riego: 'OFF', ventilador: 'OFF' };\nconst v = msg.payload;\nlet orden = null;\n\nif (msg.sensor === 'humedad_suelo') {\n    if (v < cfg.suelo_min && act.riego !== 'ON')\n        orden = { actuador: 'riego', estado: 'ON', motivo: `Humedad del suelo ${v}% < ${cfg.suelo_min}%` };\n    else if (v > cfg.suelo_max && act.riego !== 'OFF')\n        orden = { actuador: 'riego', estado: 'OFF', motivo: `Humedad del suelo ${v}% > ${cfg.suelo_max}%` };\n}\nif (msg.sensor === 'temperatura') {\n    if (v > cfg.temp_max && act.ventilador !== 'ON')\n        orden = { actuador: 'ventilador', estado: 'ON', motivo: `Temperatura ${v}°C > ${cfg.temp_max}°C` };\n    else if (v < cfg.temp_ok && act.ventilador !== 'OFF')\n        orden = { actuador: 'ventilador', estado: 'OFF', motivo: `Temperatura ${v}°C < ${cfg.temp_ok}°C` };\n}\nif (!orden) return null;\norden.origen = 'auto';\nreturn { payload: orden };\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 120,
+    "wires": [
+      [
+        "fn_aplicar"
+      ]
+    ]
+  },
+  {
+    "id": "fn_detectar",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Detectar alertas",
+    "func": "const cfg = Object.assign({ temp_alerta: 38, suelo_critico: 15 }, flow.get('config') || {});\nconst v = msg.payload;\n\nif (msg.sensor === 'temperatura' && v >= cfg.temp_alerta) {\n    return { payload: {\n        tipo: 'temperatura_critica', sensor: msg.sensor, valor: v, umbral: cfg.temp_alerta,\n        mensaje: `🔥 Temperatura crítica en el invernadero: ${v} °C (límite ${cfg.temp_alerta} °C)`\n    } };\n}\nif (msg.sensor === 'humedad_suelo' && v <= cfg.suelo_critico) {\n    return { payload: {\n        tipo: 'suelo_seco', sensor: msg.sensor, valor: v, umbral: cfg.suelo_critico,\n        mensaje: `💧 Sustrato muy seco: ${v} % (mínimo ${cfg.suelo_critico} %). Revisar la bomba de riego.`\n    } };\n}\nreturn null;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 180,
+    "wires": [
+      [
+        "fn_alerta"
+      ]
+    ]
+  },
+  {
+    "id": "c_actuadores",
+    "type": "comment",
+    "z": "tab_logica",
+    "name": "2) Actuadores: comando MQTT (retenido) + evento en la base",
+    "info": "",
+    "x": 1080,
+    "y": 160,
+    "wires": []
+  },
+  {
+    "id": "fn_aplicar",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Aplicar actuador",
+    "func": "// msg.payload = { actuador, estado, origen, motivo }\nconst o = msg.payload;\nconst act = flow.get('actuadores') || { riego: 'OFF', ventilador: 'OFF' };\nact[o.actuador] = o.estado;\nflow.set('actuadores', act);\n\nnode.status({\n    fill: (act.riego === 'ON' || act.ventilador === 'ON') ? 'blue' : 'grey',\n    shape: 'dot', text: `riego ${act.riego} · ventilador ${act.ventilador}`\n});\n\nconst comando = { topic: `invernadero/actuadores/${o.actuador}`, payload: o.estado, qos: 1, retain: true };\nconst estado  = { topic: 'invernadero/estado/actuadores', payload: JSON.stringify(act), qos: 1, retain: true };\nconst sql = {\n    topic: 'INSERT INTO eventos (actuador, estado, origen, motivo) VALUES (?, ?, ?, ?)',\n    payload: [o.actuador, o.estado, o.origen, o.motivo || null]\n};\nreturn [[comando, estado], sql];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 820,
+    "y": 200,
+    "wires": [
+      [
+        "out_mqtt"
+      ],
+      [
+        "db_insert"
+      ]
+    ]
+  },
+  {
+    "id": "out_mqtt",
+    "type": "mqtt out",
+    "z": "tab_logica",
+    "name": "Publicar (MQTT)",
+    "topic": "",
+    "qos": "",
+    "retain": "",
+    "respTopic": "",
+    "contentType": "",
+    "userProps": "",
+    "correl": "",
+    "expiry": "",
+    "broker": "broker_mosquitto",
+    "x": 1080,
+    "y": 220,
+    "wires": []
+  },
+  {
+    "id": "c_control",
+    "type": "comment",
+    "z": "tab_logica",
+    "name": "3) Control manual desde el dashboard (por MQTT)",
+    "info": "",
+    "x": 240,
+    "y": 260,
+    "wires": []
+  },
+  {
+    "id": "in_control",
+    "type": "mqtt in",
+    "z": "tab_logica",
+    "name": "Comandos",
+    "topic": "invernadero/control/#",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "broker_mosquitto",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 110,
+    "y": 300,
+    "wires": [
+      [
+        "fn_comando"
+      ]
+    ]
+  },
+  {
+    "id": "fn_comando",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Comando manual",
+    "func": "// invernadero/control/modo         auto | manual\n// invernadero/control/riego        ON | OFF   (solo en modo manual)\n// invernadero/control/ventilador   ON | OFF   (solo en modo manual)\nconst destino = msg.topic.split('/')[2];\nconst valor = String(msg.payload).trim();\n\nif (destino === 'modo') {\n    const modo = valor.toLowerCase() === 'manual' ? 'manual' : 'auto';\n    flow.set('modo', modo);\n    node.status({ fill: modo === 'auto' ? 'green' : 'yellow', shape: 'ring', text: 'Modo ' + modo });\n    return [{ topic: 'invernadero/estado/modo', payload: modo, qos: 1, retain: true }, null];\n}\nif (destino === 'riego' || destino === 'ventilador') {\n    if ((flow.get('modo') || 'auto') !== 'manual') {\n        node.warn('Comando ignorado: el sistema está en modo automático. Pasalo a manual desde el dashboard.');\n        return null;\n    }\n    const estado = valor.toUpperCase() === 'ON' ? 'ON' : 'OFF';\n    return [null, { payload: { actuador: destino, estado: estado, origen: 'manual',\n                               motivo: 'Comando desde el dashboard' } }];\n}\nreturn null;\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 320,
+    "y": 300,
+    "wires": [
+      [
+        "out_mqtt"
+      ],
+      [
+        "fn_aplicar"
+      ]
+    ]
+  },
+  {
+    "id": "in_estado",
+    "type": "mqtt in",
+    "z": "tab_logica",
+    "name": "Estado retenido",
+    "topic": "invernadero/estado/#",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "broker_mosquitto",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 130,
+    "y": 360,
+    "wires": [
+      [
+        "fn_restaurar"
+      ]
+    ]
+  },
+  {
+    "id": "fn_restaurar",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Restaurar estado",
+    "func": "// Al reiniciar Node-RED, el broker le devuelve el último estado retenido.\nconst clave = msg.topic.split('/')[2];\nif (clave === 'modo') {\n    flow.set('modo', String(msg.payload).trim() === 'manual' ? 'manual' : 'auto');\n} else if (clave === 'actuadores') {\n    try {\n        const act = JSON.parse(msg.payload);\n        flow.set('actuadores', Object.assign({ riego: 'OFF', ventilador: 'OFF' }, act));\n    } catch (e) {\n        node.warn('Estado retenido inválido: ' + msg.payload);\n    }\n}\nreturn null;\n",
+    "outputs": 0,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 360,
+    "wires": []
+  },
+  {
+    "id": "inj_inicio",
+    "type": "inject",
+    "z": "tab_logica",
+    "name": "Al iniciar",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "3",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 130,
+    "y": 420,
+    "wires": [
+      [
+        "fn_inicio"
+      ]
+    ]
+  },
+  {
+    "id": "fn_inicio",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Publicar estado inicial",
+    "func": "if (!flow.get('modo')) flow.set('modo', 'auto');\nif (!flow.get('actuadores')) flow.set('actuadores', { riego: 'OFF', ventilador: 'OFF' });\nreturn [[\n    { topic: 'invernadero/estado/modo', payload: flow.get('modo'), qos: 1, retain: true },\n    { topic: 'invernadero/estado/actuadores', payload: JSON.stringify(flow.get('actuadores')), qos: 1, retain: true }\n]];\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 340,
+    "y": 420,
+    "wires": [
+      [
+        "out_mqtt"
+      ]
+    ]
+  },
+  {
+    "id": "c_alertas",
+    "type": "comment",
+    "z": "tab_logica",
+    "name": "4) Alertas → webhook HTTP de n8n + tabla alertas",
+    "info": "La URL del webhook se puede cambiar con la variable de entorno N8N_WEBHOOK_URL o editando el nodo 'Preparar alerta'.",
+    "x": 260,
+    "y": 480,
+    "wires": []
+  },
+  {
+    "id": "in_conexion",
+    "type": "mqtt in",
+    "z": "tab_logica",
+    "name": "Conexión simulador (LWT)",
+    "topic": "invernadero/simulador/conexion",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "broker_mosquitto",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 150,
+    "y": 520,
+    "wires": [
+      [
+        "fn_conexion"
+      ]
+    ]
+  },
+  {
+    "id": "fn_conexion",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "¿Sensores caídos?",
+    "func": "// El simulador deja como \"última voluntad\" el mensaje \"offline\".\n// Si el proceso se corta, el broker lo publica y acá se genera la alerta.\nif (msg.retain) return null;            // ignorar el estado viejo al reconectar\nif (String(msg.payload).trim() !== 'offline') return null;\nreturn { payload: {\n    tipo: 'sensores_desconectados', sensor: null, valor: null, umbral: null,\n    mensaje: '⚠️ Se perdió la conexión con los sensores del invernadero (última voluntad MQTT).'\n} };\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 380,
+    "y": 520,
+    "wires": [
+      [
+        "fn_alerta"
+      ]
+    ]
+  },
+  {
+    "id": "fn_alerta",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Preparar alerta",
+    "func": "// Anti-spam: una alerta del mismo tipo cada X minutos (tabla configuracion)\nconst a = msg.payload;\nconst cfg = flow.get('config') || {};\nconst esperaMs = (cfg.alerta_minutos ?? 10) * 60 * 1000;\nconst ultimas = flow.get('ultimasAlertas') || {};\nconst ahora = Date.now();\nif (ultimas[a.tipo] && ahora - ultimas[a.tipo] < esperaMs) return null;\nultimas[a.tipo] = ahora;\nflow.set('ultimasAlertas', ultimas);\n\na.fecha = new Date().toISOString();\na.modo = flow.get('modo') || 'auto';\na.actuadores = flow.get('actuadores') || { riego: 'OFF', ventilador: 'OFF' };\n\nconst webhook = {\n    url: env.get('N8N_WEBHOOK_URL') || 'http://localhost:5678/webhook/invernadero-alerta',\n    headers: { 'Content-Type': 'application/json' },\n    payload: a\n};\nconst sql = {\n    topic: 'INSERT INTO alertas (tipo, sensor, valor, mensaje) VALUES (?, ?, ?, ?)',\n    payload: [a.tipo, a.sensor, a.valor, a.mensaje]\n};\nnode.status({ fill: 'red', shape: 'dot', text: `${a.tipo} · ${new Date().toLocaleTimeString()}` });\nreturn [webhook, sql];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 620,
+    "y": 560,
+    "wires": [
+      [
+        "http_n8n"
+      ],
+      [
+        "db_insert"
+      ]
+    ]
+  },
+  {
+    "id": "http_n8n",
+    "type": "http request",
+    "z": "tab_logica",
+    "name": "Webhook n8n",
+    "method": "POST",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 850,
+    "y": 540,
+    "wires": [
+      [
+        "dbg_n8n"
+      ]
+    ]
+  },
+  {
+    "id": "dbg_n8n",
+    "type": "debug",
+    "z": "tab_logica",
+    "name": "Respuesta de n8n",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1060,
+    "y": 540,
+    "wires": []
+  },
+  {
+    "id": "c_config",
+    "type": "comment",
+    "z": "tab_logica",
+    "name": "5) Umbrales: se leen de la tabla configuracion cada 30 s",
+    "info": "",
+    "x": 270,
+    "y": 620,
+    "wires": []
+  },
+  {
+    "id": "inj_config",
+    "type": "inject",
+    "z": "tab_logica",
+    "name": "Cada 30 s",
+    "props": [
+      {
+        "p": "payload"
+      },
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "30",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "2",
+    "topic": "SELECT parametro, valor FROM configuracion",
+    "payload": "",
+    "payloadType": "date",
+    "x": 130,
+    "y": 660,
+    "wires": [
+      [
+        "db_config"
+      ]
+    ]
+  },
+  {
+    "id": "db_config",
+    "type": "mysql",
+    "z": "tab_logica",
+    "mydb": "db_invernadero",
+    "name": "Leer configuración",
+    "x": 340,
+    "y": 660,
+    "wires": [
+      [
+        "fn_config"
+      ]
+    ]
+  },
+  {
+    "id": "fn_config",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Guardar umbrales",
+    "func": "if (!Array.isArray(msg.payload)) return null;\nconst cfg = {};\nfor (const fila of msg.payload) cfg[fila.parametro] = Number(fila.valor);\nflow.set('config', cfg);\nnode.status({ fill: 'green', shape: 'dot',\n              text: `${Object.keys(cfg).length} parámetros · ${new Date().toLocaleTimeString()}` });\nreturn null;\n",
+    "outputs": 0,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 660,
+    "wires": []
+  },
+  {
+    "id": "c_api",
+    "type": "comment",
+    "z": "tab_logica",
+    "name": "6) API HTTP (la usa n8n para el resumen diario)",
+    "info": "",
+    "x": 240,
+    "y": 720,
+    "wires": []
+  },
+  {
+    "id": "http_estado",
+    "type": "http in",
+    "z": "tab_logica",
+    "name": "",
+    "url": "/invernadero/estado",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 760,
+    "wires": [
+      [
+        "fn_estado"
+      ]
+    ]
+  },
+  {
+    "id": "fn_estado",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Estado actual",
+    "func": "msg.headers = { 'Access-Control-Allow-Origin': '*' };\nmsg.payload = {\n    fecha: new Date().toISOString(),\n    modo: flow.get('modo') || 'auto',\n    lecturas: flow.get('lecturas') || {},\n    actuadores: flow.get('actuadores') || { riego: 'OFF', ventilador: 'OFF' },\n    umbrales: flow.get('config') || {}\n};\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 400,
+    "y": 760,
+    "wires": [
+      [
+        "resp_estado"
+      ]
+    ]
+  },
+  {
+    "id": "resp_estado",
+    "type": "http response",
+    "z": "tab_logica",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 590,
+    "y": 760,
+    "wires": []
+  },
+  {
+    "id": "http_resumen",
+    "type": "http in",
+    "z": "tab_logica",
+    "name": "",
+    "url": "/invernadero/resumen",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 170,
+    "y": 820,
+    "wires": [
+      [
+        "fn_res1"
+      ]
+    ]
+  },
+  {
+    "id": "fn_res1",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "SQL: sensores 24 h",
+    "func": "msg.topic = `SELECT sensor,\n                    ROUND(MIN(valor), 1) AS minimo,\n                    ROUND(MAX(valor), 1) AS maximo,\n                    ROUND(AVG(valor), 1) AS promedio,\n                    COUNT(*)             AS lecturas\n               FROM lecturas\n              WHERE fecha >= NOW() - INTERVAL 24 HOUR\n              GROUP BY sensor`;\nmsg.payload = [];\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 400,
+    "y": 820,
+    "wires": [
+      [
+        "db_res1"
+      ]
+    ]
+  },
+  {
+    "id": "db_res1",
+    "type": "mysql",
+    "z": "tab_logica",
+    "mydb": "db_invernadero",
+    "name": "Consulta sensores",
+    "x": 610,
+    "y": 820,
+    "wires": [
+      [
+        "fn_res2"
+      ]
+    ]
+  },
+  {
+    "id": "fn_res2",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "SQL: eventos y alertas 24 h",
+    "func": "msg.sensores = msg.payload;\nmsg.topic = `SELECT actuador AS item, COUNT(*) AS cantidad\n               FROM eventos\n              WHERE estado = 'ON' AND fecha >= NOW() - INTERVAL 24 HOUR\n              GROUP BY actuador\n             UNION ALL\n             SELECT 'alertas', COUNT(*)\n               FROM alertas\n              WHERE fecha >= NOW() - INTERVAL 24 HOUR`;\nmsg.payload = [];\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 830,
+    "y": 820,
+    "wires": [
+      [
+        "db_res2"
+      ]
+    ]
+  },
+  {
+    "id": "db_res2",
+    "type": "mysql",
+    "z": "tab_logica",
+    "mydb": "db_invernadero",
+    "name": "Consulta eventos",
+    "x": 1060,
+    "y": 820,
+    "wires": [
+      [
+        "fn_res3"
+      ]
+    ]
+  },
+  {
+    "id": "fn_res3",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Armar resumen",
+    "func": "const sensores = {};\nfor (const s of msg.sensores || []) {\n    sensores[s.sensor] = {\n        minimo: Number(s.minimo), maximo: Number(s.maximo),\n        promedio: Number(s.promedio), lecturas: Number(s.lecturas)\n    };\n}\nconst conteo = {};\nfor (const f of msg.payload || []) conteo[f.item] = Number(f.cantidad);\n\nmsg.headers = { 'Access-Control-Allow-Origin': '*' };\nmsg.payload = {\n    periodo: 'últimas 24 horas',\n    generado: new Date().toISOString(),\n    sensores: sensores,\n    encendidos: { riego: conteo.riego || 0, ventilador: conteo.ventilador || 0 },\n    alertas: conteo.alertas || 0\n};\ndelete msg.sensores;\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1260,
+    "y": 820,
+    "wires": [
+      [
+        "resp_resumen"
+      ]
+    ]
+  },
+  {
+    "id": "resp_resumen",
+    "type": "http response",
+    "z": "tab_logica",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 1430,
+    "y": 820,
+    "wires": []
+  },
+  {
+    "id": "catch_resumen",
+    "type": "catch",
+    "z": "tab_logica",
+    "name": "Error en la base",
+    "scope": [
+      "db_res1",
+      "db_res2"
+    ],
+    "uncaught": false,
+    "x": 860,
+    "y": 880,
+    "wires": [
+      [
+        "fn_res_error"
+      ]
+    ]
+  },
+  {
+    "id": "fn_res_error",
+    "type": "function",
+    "z": "tab_logica",
+    "name": "Responder 500",
+    "func": "msg.statusCode = 500;\nmsg.payload = { error: 'No se pudo consultar la base de datos',\n                detalle: msg.error && msg.error.message };\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1060,
+    "y": 880,
+    "wires": [
+      [
+        "resp_resumen"
+      ]
+    ]
+  },
+  {
+    "id": "catch_todo",
+    "type": "catch",
+    "z": "tab_logica",
+    "name": "Errores",
+    "scope": null,
+    "uncaught": false,
+    "x": 110,
+    "y": 940,
+    "wires": [
+      [
+        "dbg_errores"
+      ]
+    ]
+  },
+  {
+    "id": "dbg_errores",
+    "type": "debug",
+    "z": "tab_logica",
+    "name": "Ver errores",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "error",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 300,
+    "y": 940,
+    "wires": []
+  }
+]

@@ -1,0 +1,214 @@
+{
+  "name": "Invernadero IoT — Alertas y resumen diario",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 1) Alertas en tiempo real\nNode-RED hace un **POST** (HTTP) a este webhook cuando:\n- la temperatura pasa el límite crítico\n- el sustrato está muy seco\n- se cortan los sensores (última voluntad MQTT)\n\nURL de producción: `http://<host>:5678/webhook/invernadero-alerta`",
+        "height": 300,
+        "width": 760,
+        "color": 3
+      },
+      "id": "00a506c8-20d5-59fa-b217-46d4bad17570",
+      "name": "Nota alertas",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "invernadero-alerta",
+        "options": {}
+      },
+      "id": "ba6c007f-e8ba-54fb-ad8e-bed051d41231",
+      "name": "Alerta desde Node-RED",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        60
+      ],
+      "webhookId": "eb82e6df-c2bb-5396-8bac-f5f3dee38fb3"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Node-RED manda: { tipo, sensor, valor, umbral, mensaje, fecha, modo, actuadores }\nconst a = $input.first().json.body;\nconst d = new Date(new Date(a.fecha).getTime() - 3 * 3600 * 1000);   // hora de Argentina (UTC-3)\nconst dos = n => String(n).padStart(2, '0');\nconst hora = `${dos(d.getUTCDate())}/${dos(d.getUTCMonth() + 1)} ${dos(d.getUTCHours())}:${dos(d.getUTCMinutes())} h`;\nconst act = a.actuadores || {};\n\nconst texto = [\n  '🌱 Invernadero IoT — ALERTA',\n  '',\n  a.mensaje,\n  '',\n  `🕒 ${hora}`,\n  `⚙️ Modo: ${a.modo === 'manual' ? 'manual' : 'automático'}`,\n  `💧 Riego: ${act.riego || '-'}   🌀 Ventilador: ${act.ventilador || '-'}`\n].join('\\n');\n\nreturn [{ json: { texto, tipo: a.tipo } }];"
+      },
+      "id": "5e331117-39cd-5ba4-b45b-e187203cd612",
+      "name": "Armar mensaje de alerta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "PONER_TU_CHAT_ID",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "540f7db5-bbd8-5dd4-b96c-284a9e57a0c1",
+      "name": "Telegram: enviar alerta",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        480,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 2) Resumen diario\nTodos los días a las 20:00 n8n le pide a Node-RED el resumen por **HTTP GET** (`/invernadero/resumen`, que consulta MariaDB) y lo manda por Telegram.",
+        "height": 260,
+        "width": 760,
+        "color": 5
+      },
+      "id": "770dc29a-bb12-540d-8ab9-c0d1b109c8f4",
+      "name": "Nota resumen",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 20 * * *"
+            }
+          ]
+        }
+      },
+      "id": "03ad9a25-b6e3-5df5-acd2-75824797632a",
+      "name": "Todos los días 20:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:1880/invernadero/resumen",
+        "options": {}
+      },
+      "id": "39d43bac-8cf1-5feb-805d-57277217c228",
+      "name": "Pedir resumen a Node-RED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Respuesta de GET /invernadero/resumen (Node-RED)\nconst r = $input.first().json;\nconst s = r.sensores || {};\nconst linea = (nombre, clave, unidad) => s[clave]\n  ? `${nombre}: mín ${s[clave].minimo}${unidad} · máx ${s[clave].maximo}${unidad} · prom ${s[clave].promedio}${unidad}`\n  : `${nombre}: sin datos`;\n\nconst texto = [\n  '🌱 Invernadero IoT — Resumen de las últimas 24 h',\n  '',\n  linea('🌡️ Temperatura', 'temperatura', ' °C'),\n  linea('💨 Humedad ambiente', 'humedad_ambiente', ' %'),\n  linea('🪴 Humedad del suelo', 'humedad_suelo', ' %'),\n  linea('☀️ Luz', 'luz', ' lx'),\n  '',\n  `💧 Riegos: ${r.encendidos?.riego ?? 0}   🌀 Ventilaciones: ${r.encendidos?.ventilador ?? 0}`,\n  `🚨 Alertas: ${r.alertas ?? 0}`\n].join('\\n');\n\nreturn [{ json: { texto } }];"
+      },
+      "id": "734ec39c-9e21-57c4-a5a9-c82e97440784",
+      "name": "Armar resumen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "PONER_TU_CHAT_ID",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "fa067595-4bbe-59e7-8d24-81acb6bd2237",
+      "name": "Telegram: enviar resumen",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        720,
+        360
+      ]
+    }
+  ],
+  "connections": {
+    "Alerta desde Node-RED": {
+      "main": [
+        [
+          {
+            "node": "Armar mensaje de alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar mensaje de alerta": {
+      "main": [
+        [
+          {
+            "node": "Telegram: enviar alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Todos los días 20:00": {
+      "main": [
+        [
+          {
+            "node": "Pedir resumen a Node-RED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pedir resumen a Node-RED": {
+      "main": [
+        [
+          {
+            "node": "Armar resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar resumen": {
+      "main": [
+        [
+          {
+            "node": "Telegram: enviar resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Argentina/Buenos_Aires"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

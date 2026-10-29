@@ -1,0 +1,766 @@
+[
+  {
+    "id": "tab_dashboard",
+    "type": "tab",
+    "label": "Invernadero - Dashboard",
+    "disabled": false,
+    "info": "Dashboard de control. Necesita la paleta node-red-dashboard.\nSe comunica con el flow de lógica solo por MQTT. Abrir en http://<host>:1880/ui"
+  },
+  {
+    "id": "broker_mosquitto_dash",
+    "type": "mqtt-broker",
+    "name": "Mosquitto local (dashboard)",
+    "broker": "localhost",
+    "port": "1883",
+    "clientid": "",
+    "autoConnect": true,
+    "usetls": false,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true,
+    "birthTopic": "",
+    "birthQos": "0",
+    "birthRetain": "false",
+    "birthPayload": "",
+    "birthMsg": {},
+    "closeTopic": "",
+    "closeQos": "0",
+    "closeRetain": "false",
+    "closePayload": "",
+    "closeMsg": {},
+    "willTopic": "",
+    "willQos": "0",
+    "willRetain": "false",
+    "willPayload": "",
+    "willMsg": {},
+    "userProps": "",
+    "sessionExpiry": ""
+  },
+  {
+    "id": "ui_tab_inv",
+    "type": "ui_tab",
+    "name": "Invernadero",
+    "icon": "dashboard",
+    "order": 1,
+    "disabled": false,
+    "hidden": false
+  },
+  {
+    "id": "g_sensores",
+    "type": "ui_group",
+    "name": "Sensores",
+    "tab": "ui_tab_inv",
+    "order": 1,
+    "disp": true,
+    "width": "6",
+    "collapse": false,
+    "className": ""
+  },
+  {
+    "id": "g_estado",
+    "type": "ui_group",
+    "name": "Estado",
+    "tab": "ui_tab_inv",
+    "order": 2,
+    "disp": true,
+    "width": "6",
+    "collapse": false,
+    "className": ""
+  },
+  {
+    "id": "g_control",
+    "type": "ui_group",
+    "name": "Control manual",
+    "tab": "ui_tab_inv",
+    "order": 3,
+    "disp": true,
+    "width": "6",
+    "collapse": false,
+    "className": ""
+  },
+  {
+    "id": "g_sim",
+    "type": "ui_group",
+    "name": "Simulación (demo)",
+    "tab": "ui_tab_inv",
+    "order": 4,
+    "disp": true,
+    "width": "6",
+    "collapse": false,
+    "className": ""
+  },
+  {
+    "id": "g_grafico",
+    "type": "ui_group",
+    "name": "Gráfico en vivo",
+    "tab": "ui_tab_inv",
+    "order": 5,
+    "disp": true,
+    "width": "12",
+    "collapse": false,
+    "className": ""
+  },
+  {
+    "id": "d_c1",
+    "type": "comment",
+    "z": "tab_dashboard",
+    "name": "Lecturas → gauges y gráfico",
+    "info": "",
+    "x": 160,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "d_in_sens",
+    "type": "mqtt in",
+    "z": "tab_dashboard",
+    "name": "Sensores",
+    "topic": "invernadero/sensores/+",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "broker_mosquitto_dash",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 110,
+    "y": 100,
+    "wires": [
+      [
+        "d_fn_sep"
+      ]
+    ]
+  },
+  {
+    "id": "d_fn_sep",
+    "type": "function",
+    "z": "tab_dashboard",
+    "name": "Separar por sensor",
+    "func": "const sensor = msg.topic.split('/').pop();\nconst valor = parseFloat(msg.payload);\nconst orden = { temperatura: 0, humedad_ambiente: 1, humedad_suelo: 2, luz: 3 };\nif (isNaN(valor) || !(sensor in orden)) return null;\n\nconst salida = [null, null, null, null, null];\nsalida[orden[sensor]] = { payload: valor };\nif (sensor === 'temperatura')   salida[4] = { topic: 'Temperatura (°C)', payload: valor };\nif (sensor === 'humedad_suelo') salida[4] = { topic: 'Humedad del suelo (%)', payload: valor };\nreturn salida;\n",
+    "outputs": 5,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 320,
+    "y": 100,
+    "wires": [
+      [
+        "d_g_temp"
+      ],
+      [
+        "d_g_ha"
+      ],
+      [
+        "d_g_hs"
+      ],
+      [
+        "d_g_luz"
+      ],
+      [
+        "d_chart"
+      ]
+    ]
+  },
+  {
+    "id": "d_g_temp",
+    "type": "ui_gauge",
+    "z": "tab_dashboard",
+    "name": "Temperatura",
+    "group": "g_sensores",
+    "order": 1,
+    "width": 3,
+    "height": 3,
+    "gtype": "gage",
+    "title": "Temperatura",
+    "label": "°C",
+    "format": "{{value}}",
+    "min": 0,
+    "max": 50,
+    "colors": [
+      "#2e7d32",
+      "#f9a825",
+      "#c62828"
+    ],
+    "seg1": "32",
+    "seg2": "38",
+    "diff": false,
+    "className": "",
+    "x": 560,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "d_g_ha",
+    "type": "ui_gauge",
+    "z": "tab_dashboard",
+    "name": "Humedad ambiente",
+    "group": "g_sensores",
+    "order": 2,
+    "width": 3,
+    "height": 3,
+    "gtype": "gage",
+    "title": "Humedad ambiente",
+    "label": "%",
+    "format": "{{value}}",
+    "min": 0,
+    "max": 100,
+    "colors": [
+      "#f9a825",
+      "#2e7d32",
+      "#1565c0"
+    ],
+    "seg1": "40",
+    "seg2": "85",
+    "diff": false,
+    "className": "",
+    "x": 570,
+    "y": 80,
+    "wires": []
+  },
+  {
+    "id": "d_g_hs",
+    "type": "ui_gauge",
+    "z": "tab_dashboard",
+    "name": "Humedad del suelo",
+    "group": "g_sensores",
+    "order": 3,
+    "width": 3,
+    "height": 3,
+    "gtype": "gage",
+    "title": "Humedad del suelo",
+    "label": "%",
+    "format": "{{value}}",
+    "min": 0,
+    "max": 100,
+    "colors": [
+      "#c62828",
+      "#f9a825",
+      "#2e7d32"
+    ],
+    "seg1": "15",
+    "seg2": "30",
+    "diff": false,
+    "className": "",
+    "x": 570,
+    "y": 120,
+    "wires": []
+  },
+  {
+    "id": "d_g_luz",
+    "type": "ui_gauge",
+    "z": "tab_dashboard",
+    "name": "Luz",
+    "group": "g_sensores",
+    "order": 4,
+    "width": 3,
+    "height": 3,
+    "gtype": "gage",
+    "title": "Luz",
+    "label": "lx",
+    "format": "{{value}}",
+    "min": 0,
+    "max": 50000,
+    "colors": [
+      "#455a64",
+      "#fbc02d",
+      "#ff8f00"
+    ],
+    "seg1": "10000",
+    "seg2": "35000",
+    "diff": false,
+    "className": "",
+    "x": 540,
+    "y": 160,
+    "wires": []
+  },
+  {
+    "id": "d_chart",
+    "type": "ui_chart",
+    "z": "tab_dashboard",
+    "name": "Gráfico en vivo",
+    "group": "g_grafico",
+    "order": 1,
+    "width": 12,
+    "height": 5,
+    "label": "Temperatura y humedad del suelo (últimos 15 min)",
+    "chartType": "line",
+    "legend": "true",
+    "xformat": "HH:mm:ss",
+    "interpolate": "linear",
+    "nodata": "Esperando datos...",
+    "dot": false,
+    "ymin": "0",
+    "ymax": "100",
+    "removeOlder": "15",
+    "removeOlderPoints": "",
+    "removeOlderUnit": "60",
+    "cutout": 0,
+    "useOneColor": false,
+    "useUTC": false,
+    "colors": [
+      "#e53935",
+      "#1e88e5",
+      "#ff7f0e",
+      "#2ca02c",
+      "#98df8a",
+      "#d62728",
+      "#ff9896",
+      "#9467bd",
+      "#c5b0d5"
+    ],
+    "outputs": 1,
+    "useDifferentColor": false,
+    "className": "",
+    "x": 560,
+    "y": 200,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "d_c2",
+    "type": "comment",
+    "z": "tab_dashboard",
+    "name": "Estado del sistema",
+    "info": "",
+    "x": 130,
+    "y": 260,
+    "wires": []
+  },
+  {
+    "id": "d_in_act",
+    "type": "mqtt in",
+    "z": "tab_dashboard",
+    "name": "Estado actuadores",
+    "topic": "invernadero/estado/actuadores",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "broker_mosquitto_dash",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 140,
+    "y": 300,
+    "wires": [
+      [
+        "d_fn_act"
+      ]
+    ]
+  },
+  {
+    "id": "d_fn_act",
+    "type": "function",
+    "z": "tab_dashboard",
+    "name": "Texto actuadores",
+    "func": "let act;\ntry { act = JSON.parse(msg.payload); } catch (e) { return null; }\nconst txt = e => e === 'ON' ? '🟢 Encendido' : '⚪ Apagado';\nreturn [{ payload: txt(act.riego) }, { payload: txt(act.ventilador) }];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 370,
+    "y": 300,
+    "wires": [
+      [
+        "d_t_riego"
+      ],
+      [
+        "d_t_vent"
+      ]
+    ]
+  },
+  {
+    "id": "d_t_riego",
+    "type": "ui_text",
+    "z": "tab_dashboard",
+    "group": "g_estado",
+    "order": 3,
+    "width": 0,
+    "height": 0,
+    "name": "Riego",
+    "label": "Riego",
+    "format": "{{msg.payload}}",
+    "layout": "row-spread",
+    "className": "",
+    "style": false,
+    "font": "",
+    "fontSize": "",
+    "color": "#000000",
+    "x": 570,
+    "y": 280,
+    "wires": []
+  },
+  {
+    "id": "d_t_vent",
+    "type": "ui_text",
+    "z": "tab_dashboard",
+    "group": "g_estado",
+    "order": 4,
+    "width": 0,
+    "height": 0,
+    "name": "Ventilador",
+    "label": "Ventilador",
+    "format": "{{msg.payload}}",
+    "layout": "row-spread",
+    "className": "",
+    "style": false,
+    "font": "",
+    "fontSize": "",
+    "color": "#000000",
+    "x": 580,
+    "y": 320,
+    "wires": []
+  },
+  {
+    "id": "d_in_hora",
+    "type": "mqtt in",
+    "z": "tab_dashboard",
+    "name": "Hora simulada",
+    "topic": "invernadero/simulador/hora",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "broker_mosquitto_dash",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 130,
+    "y": 360,
+    "wires": [
+      [
+        "d_t_hora"
+      ]
+    ]
+  },
+  {
+    "id": "d_t_hora",
+    "type": "ui_text",
+    "z": "tab_dashboard",
+    "group": "g_estado",
+    "order": 1,
+    "width": 0,
+    "height": 0,
+    "name": "Hora simulada",
+    "label": "Hora simulada",
+    "format": "{{msg.payload}}",
+    "layout": "row-spread",
+    "className": "",
+    "style": false,
+    "font": "",
+    "fontSize": "",
+    "color": "#000000",
+    "x": 380,
+    "y": 360,
+    "wires": []
+  },
+  {
+    "id": "d_in_con",
+    "type": "mqtt in",
+    "z": "tab_dashboard",
+    "name": "Conexión simulador",
+    "topic": "invernadero/simulador/conexion",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "broker_mosquitto_dash",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 150,
+    "y": 400,
+    "wires": [
+      [
+        "d_fn_con"
+      ]
+    ]
+  },
+  {
+    "id": "d_fn_con",
+    "type": "function",
+    "z": "tab_dashboard",
+    "name": "Texto conexión",
+    "func": "return { payload: String(msg.payload).trim() === 'online' ? '🟢 Conectados' : '🔴 Desconectados' };\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 370,
+    "y": 400,
+    "wires": [
+      [
+        "d_t_con"
+      ]
+    ]
+  },
+  {
+    "id": "d_t_con",
+    "type": "ui_text",
+    "z": "tab_dashboard",
+    "group": "g_estado",
+    "order": 2,
+    "width": 0,
+    "height": 0,
+    "name": "Sensores",
+    "label": "Sensores",
+    "format": "{{msg.payload}}",
+    "layout": "row-spread",
+    "className": "",
+    "style": false,
+    "font": "",
+    "fontSize": "",
+    "color": "#000000",
+    "x": 560,
+    "y": 400,
+    "wires": []
+  },
+  {
+    "id": "d_c3",
+    "type": "comment",
+    "z": "tab_dashboard",
+    "name": "Control manual (publica en invernadero/control/...)",
+    "info": "",
+    "x": 220,
+    "y": 460,
+    "wires": []
+  },
+  {
+    "id": "d_in_modo",
+    "type": "mqtt in",
+    "z": "tab_dashboard",
+    "name": "Estado modo",
+    "topic": "invernadero/estado/modo",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "broker_mosquitto_dash",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 120,
+    "y": 500,
+    "wires": [
+      [
+        "d_sw_modo"
+      ]
+    ]
+  },
+  {
+    "id": "d_sw_modo",
+    "type": "ui_switch",
+    "z": "tab_dashboard",
+    "name": "Modo manual",
+    "label": "Modo manual",
+    "tooltip": "Apagado = el sistema decide solo",
+    "group": "g_control",
+    "order": 1,
+    "width": 6,
+    "height": 1,
+    "passthru": false,
+    "decouple": "false",
+    "topic": "invernadero/control/modo",
+    "topicType": "str",
+    "style": "",
+    "onvalue": "manual",
+    "onvalueType": "str",
+    "onicon": "",
+    "oncolor": "",
+    "offvalue": "auto",
+    "offvalueType": "str",
+    "officon": "",
+    "offcolor": "",
+    "animate": false,
+    "className": "",
+    "x": 330,
+    "y": 500,
+    "wires": [
+      [
+        "d_out"
+      ]
+    ]
+  },
+  {
+    "id": "d_b_r_on",
+    "type": "ui_button",
+    "z": "tab_dashboard",
+    "name": "Regar",
+    "group": "g_control",
+    "order": 2,
+    "width": 3,
+    "height": 1,
+    "passthru": false,
+    "label": "Regar",
+    "tooltip": "",
+    "color": "#ffffff",
+    "bgcolor": "#1565c0",
+    "className": "",
+    "icon": "",
+    "payload": "ON",
+    "payloadType": "str",
+    "topic": "invernadero/control/riego",
+    "topicType": "str",
+    "x": 310,
+    "y": 560,
+    "wires": [
+      [
+        "d_out"
+      ]
+    ]
+  },
+  {
+    "id": "d_b_r_off",
+    "type": "ui_button",
+    "z": "tab_dashboard",
+    "name": "Cortar riego",
+    "group": "g_control",
+    "order": 3,
+    "width": 3,
+    "height": 1,
+    "passthru": false,
+    "label": "Cortar riego",
+    "tooltip": "",
+    "color": "#ffffff",
+    "bgcolor": "#546e7a",
+    "className": "",
+    "icon": "",
+    "payload": "OFF",
+    "payloadType": "str",
+    "topic": "invernadero/control/riego",
+    "topicType": "str",
+    "x": 320,
+    "y": 600,
+    "wires": [
+      [
+        "d_out"
+      ]
+    ]
+  },
+  {
+    "id": "d_b_v_on",
+    "type": "ui_button",
+    "z": "tab_dashboard",
+    "name": "Ventilar",
+    "group": "g_control",
+    "order": 4,
+    "width": 3,
+    "height": 1,
+    "passthru": false,
+    "label": "Ventilar",
+    "tooltip": "",
+    "color": "#ffffff",
+    "bgcolor": "#00897b",
+    "className": "",
+    "icon": "",
+    "payload": "ON",
+    "payloadType": "str",
+    "topic": "invernadero/control/ventilador",
+    "topicType": "str",
+    "x": 310,
+    "y": 640,
+    "wires": [
+      [
+        "d_out"
+      ]
+    ]
+  },
+  {
+    "id": "d_b_v_off",
+    "type": "ui_button",
+    "z": "tab_dashboard",
+    "name": "Apagar ventilador",
+    "group": "g_control",
+    "order": 5,
+    "width": 3,
+    "height": 1,
+    "passthru": false,
+    "label": "Apagar ventilador",
+    "tooltip": "",
+    "color": "#ffffff",
+    "bgcolor": "#546e7a",
+    "className": "",
+    "icon": "",
+    "payload": "OFF",
+    "payloadType": "str",
+    "topic": "invernadero/control/ventilador",
+    "topicType": "str",
+    "x": 330,
+    "y": 680,
+    "wires": [
+      [
+        "d_out"
+      ]
+    ]
+  },
+  {
+    "id": "d_dd_esc",
+    "type": "ui_dropdown",
+    "z": "tab_dashboard",
+    "name": "Escenario",
+    "label": "Escenario",
+    "tooltip": "Cambia el comportamiento del simulador en vivo",
+    "place": "Elegir escenario",
+    "group": "g_sim",
+    "order": 1,
+    "width": 6,
+    "height": 1,
+    "passthru": false,
+    "multiple": false,
+    "options": [
+      {
+        "label": "Normal",
+        "value": "normal",
+        "type": "str"
+      },
+      {
+        "label": "Ola de calor",
+        "value": "ola_calor",
+        "type": "str"
+      },
+      {
+        "label": "Sequía",
+        "value": "sequia",
+        "type": "str"
+      },
+      {
+        "label": "Falla de la bomba de riego",
+        "value": "falla_riego",
+        "type": "str"
+      }
+    ],
+    "payload": "",
+    "topic": "invernadero/simulador/escenario",
+    "topicType": "str",
+    "className": "",
+    "x": 310,
+    "y": 740,
+    "wires": [
+      [
+        "d_out"
+      ]
+    ]
+  },
+  {
+    "id": "d_out",
+    "type": "mqtt out",
+    "z": "tab_dashboard",
+    "name": "Publicar (MQTT)",
+    "topic": "",
+    "qos": "1",
+    "retain": "false",
+    "respTopic": "",
+    "contentType": "",
+    "userProps": "",
+    "correl": "",
+    "expiry": "",
+    "broker": "broker_mosquitto_dash",
+    "x": 620,
+    "y": 620,
+    "wires": []
+  }
+]
