@@ -65,7 +65,7 @@
     },
     {
       "parameters": {
-        "content": "## 2) Resumen diario\nTodos los días a las 20:00 n8n le pide a Node-RED el resumen por **HTTP GET** (`/invernadero/resumen`, que consulta MariaDB) y lo manda por Telegram.",
+        "content": "## 2) Resumen diario\nTodos los días a las 20:00 n8n le pide a Node-RED el resumen por **HTTP GET** (`http://127.0.0.1:1880/invernadero/resumen`, que consulta MariaDB) y lo manda por Telegram.",
         "height": 260,
         "width": 760,
         "color": 5
@@ -101,7 +101,7 @@
     },
     {
       "parameters": {
-        "url": "http://localhost:1880/invernadero/resumen",
+        "url": "http://127.0.0.1:1880/invernadero/resumen",
         "options": {}
       },
       "id": "39d43bac-8cf1-5feb-805d-57277217c228",

@@ -17,9 +17,9 @@ Usa "última voluntad" (LWT) de MQTT: si el simulador se cae, el broker publica
 "offline" en  invernadero/simulador/conexion  y Node-RED dispara una alerta.
 
 Uso:
-  pip install -r requirements.txt
-  python simulador_invernadero.py --broker dietpi.local
-  python simulador_invernadero.py --broker dietpi.local --escenario ola_calor
+  apt install python3-paho-mqtt        (o: pip install -r requirements.txt)
+  python3 simulador_invernadero.py --usuario invernadero --clave invernadero123
+  python3 simulador_invernadero.py --usuario invernadero --clave invernadero123 --escenario ola_calor
 """
 
 import argparse
@@ -146,7 +146,8 @@ def al_conectar(client, inv, flags, reason_code, properties=None):
         client.subscribe(TOPICO_ESCENARIO)
         client.publish(TOPICO_CONEXION, "online", qos=1, retain=True)   # "nacimiento"
     else:
-        print(f"[MQTT] El broker rechazó la conexión (código {reason_code})")
+        print(f"[MQTT] El broker rechazó la conexión (código {reason_code}). "
+              "Revisá --usuario y --clave.")
 
 
 def al_desconectar(client, inv, *args):
@@ -224,13 +225,14 @@ def main():
                 client.publish(f"{PREFIJO}/sensores/{sensor}", str(valor), qos=0)
             client.publish(TOPICO_HORA, inv.reloj.strftime("%H:%M"))
 
+            aviso = "" if client.is_connected() else "  << SIN CONEXIÓN: no se envió"
             print(f"[{inv.reloj:%H:%M} sim] "
                   f"T={datos['temperatura']:5.1f}°C  "
                   f"HA={datos['humedad_ambiente']:5.1f}%  "
                   f"HS={datos['humedad_suelo']:5.1f}%  "
                   f"Luz={datos['luz']:6d} lx  | "
                   f"riego {'ON ' if inv.riego else 'OFF'}  "
-                  f"vent {'ON ' if inv.ventilador else 'OFF'}  [{inv.escenario}]")
+                  f"vent {'ON ' if inv.ventilador else 'OFF'}  [{inv.escenario}]{aviso}")
             tick += 1
             time.sleep(args.intervalo)
     except KeyboardInterrupt:

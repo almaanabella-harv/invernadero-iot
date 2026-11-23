@@ -35,7 +35,11 @@
     "willPayload": "",
     "willMsg": {},
     "userProps": "",
-    "sessionExpiry": ""
+    "sessionExpiry": "",
+    "credentials": {
+      "user": "invernadero",
+      "password": "invernadero123"
+    }
   },
   {
     "id": "db_invernadero",
@@ -419,7 +423,7 @@
     "type": "function",
     "z": "tab_logica",
     "name": "Preparar alerta",
-    "func": "// Anti-spam: una alerta del mismo tipo cada X minutos (tabla configuracion)\nconst a = msg.payload;\nconst cfg = flow.get('config') || {};\nconst esperaMs = (cfg.alerta_minutos ?? 10) * 60 * 1000;\nconst ultimas = flow.get('ultimasAlertas') || {};\nconst ahora = Date.now();\nif (ultimas[a.tipo] && ahora - ultimas[a.tipo] < esperaMs) return null;\nultimas[a.tipo] = ahora;\nflow.set('ultimasAlertas', ultimas);\n\na.fecha = new Date().toISOString();\na.modo = flow.get('modo') || 'auto';\na.actuadores = flow.get('actuadores') || { riego: 'OFF', ventilador: 'OFF' };\n\nconst webhook = {\n    url: env.get('N8N_WEBHOOK_URL') || 'http://localhost:5678/webhook/invernadero-alerta',\n    headers: { 'Content-Type': 'application/json' },\n    payload: a\n};\nconst sql = {\n    topic: 'INSERT INTO alertas (tipo, sensor, valor, mensaje) VALUES (?, ?, ?, ?)',\n    payload: [a.tipo, a.sensor, a.valor, a.mensaje]\n};\nnode.status({ fill: 'red', shape: 'dot', text: `${a.tipo} · ${new Date().toLocaleTimeString()}` });\nreturn [webhook, sql];\n",
+    "func": "// Anti-spam: una alerta del mismo tipo cada X minutos (tabla configuracion)\nconst a = msg.payload;\nconst cfg = flow.get('config') || {};\nconst esperaMs = (cfg.alerta_minutos ?? 10) * 60 * 1000;\nconst ultimas = flow.get('ultimasAlertas') || {};\nconst ahora = Date.now();\nif (ultimas[a.tipo] && ahora - ultimas[a.tipo] < esperaMs) return null;\nultimas[a.tipo] = ahora;\nflow.set('ultimasAlertas', ultimas);\n\na.fecha = new Date().toISOString();\na.modo = flow.get('modo') || 'auto';\na.actuadores = flow.get('actuadores') || { riego: 'OFF', ventilador: 'OFF' };\n\nconst webhook = {\n    url: env.get('N8N_WEBHOOK_URL') || 'http://127.0.0.1:5678/webhook/invernadero-alerta',\n    headers: { 'Content-Type': 'application/json' },\n    payload: a\n};\nconst sql = {\n    topic: 'INSERT INTO alertas (tipo, sensor, valor, mensaje) VALUES (?, ?, ?, ?)',\n    payload: [a.tipo, a.sensor, a.valor, a.mensaje]\n};\nnode.status({ fill: 'red', shape: 'dot', text: `${a.tipo} · ${new Date().toLocaleTimeString()}` });\nreturn [webhook, sql];\n",
     "outputs": 2,
     "timeout": 0,
     "noerr": 0,

@@ -1,6 +1,6 @@
 -- =====================================================================
 --  Invernadero IoT — Base de datos (MariaDB / MySQL)
---  Ejecutar como root:   sudo mariadb < invernadero.sql
+--  Ejecutar como root:   mariadb -u root -p < invernadero.sql
 --  o pegar el contenido en la pestaña SQL de phpMyAdmin.
 -- =====================================================================
 
@@ -12,7 +12,7 @@ USE invernadero;
 
 -- ---------------------------------------------------------------------
 -- Lecturas de los sensores (una fila por medición)
--- Se usa TIMESTAMP (no DATETIME) para que Grafana muestre bien la hora
+-- Se usa TIMESTAMP (no DATETIME) para que la hora se guarde bien
 -- sin importar la zona horaria configurada en la VM.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS lecturas (
@@ -74,22 +74,15 @@ INSERT INTO configuracion (parametro, valor, descripcion) VALUES
 ON DUPLICATE KEY UPDATE descripcion = VALUES(descripcion);
 
 -- ---------------------------------------------------------------------
--- Usuarios
---   nodered → escribe y lee (lo usa el nodo mysql de Node-RED)
---   grafana → solo lectura (lo usa el datasource de Grafana)
--- Cambiar las contraseñas si el repo va a ser público.
+-- Usuario que usa Node-RED (nodo mysql): lee y escribe en la base.
+-- Se crea para 'localhost' (Node-RED en la misma VM) y para '%'
+-- (por si se conecta desde otra máquina de la red).
+-- Cambiar la contraseña si se usa fuera del laboratorio.
 -- ---------------------------------------------------------------------
--- Se crean para 'localhost' (Node-RED y Grafana en la misma VM) y para '%'
--- (por si Grafana corre en otra máquina de la red).
 CREATE USER IF NOT EXISTS 'nodered'@'localhost' IDENTIFIED BY 'nodered123';
 CREATE USER IF NOT EXISTS 'nodered'@'%'         IDENTIFIED BY 'nodered123';
 GRANT SELECT, INSERT, UPDATE ON invernadero.* TO 'nodered'@'localhost';
 GRANT SELECT, INSERT, UPDATE ON invernadero.* TO 'nodered'@'%';
-
-CREATE USER IF NOT EXISTS 'grafana'@'localhost' IDENTIFIED BY 'grafana123';
-CREATE USER IF NOT EXISTS 'grafana'@'%'         IDENTIFIED BY 'grafana123';
-GRANT SELECT ON invernadero.* TO 'grafana'@'localhost';
-GRANT SELECT ON invernadero.* TO 'grafana'@'%';
 
 FLUSH PRIVILEGES;
 

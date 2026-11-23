@@ -3,7 +3,7 @@
 **Proyecto Final Integrador · Taller IoT · INCADE (Posadas, Misiones)**
 Integrantes: Anabella Nordfors · Narda Ribeiro
 
-Sistema IoT 100 % software (sensores simulados) que mide el clima de un invernadero, riega y ventila solo. También guarda todo en una base de datos, avisa por Telegram cuando algo anda mal y muestra el historial en Grafana.
+Sistema IoT 100 % software (sensores simulados) que mide el clima de un invernadero y riega y ventila solo. Guarda todo en una base de datos, avisa por Telegram cuando algo anda mal y manda un resumen diario. Además, muestra el estado en vivo en un dashboard con control manual.
 
 ---
 
@@ -24,7 +24,7 @@ En la zona hay muchos **pequeños productores con invernaderos chicos**: huertas
 | Saber qué pasa adentro | Sensores de temperatura, humedad ambiente, humedad del suelo y luz, cada 5 s |
 | Actuar sin que haya alguien | Node-RED prende el riego y la ventilación según umbrales |
 | Enterarse a tiempo | Alertas por Telegram (vía n8n) si hay temperatura crítica, sustrato seco o se cortan los sensores |
-| Decidir con datos | Todo queda en MariaDB y se analiza en Grafana; resumen diario automático |
+| Decidir con datos | Todo queda en MariaDB; resumen diario automático por Telegram y dashboard en vivo |
 
 ---
 
@@ -33,12 +33,11 @@ En la zona hay muchos **pequeños productores con invernaderos chicos**: huertas
 ```mermaid
 flowchart LR
     SIM["🐍 Simulador Python<br/>(sensores + actuadores)"]
-    MQ(["Mosquitto<br/>broker MQTT"])
-    NR["Node-RED<br/>reglas · API · dashboard"]
+    MQ(["Mosquitto<br/>broker MQTT<br/>(usuario y contraseña)"])
+    NR["Node-RED<br/>reglas · API · Dashboard 2.0"]
     DB[("MariaDB<br/>invernadero")]
-    N8N["n8n<br/>automatización"]
+    N8N["n8n (Docker)<br/>automatización"]
     TG["📱 Telegram"]
-    GF["📊 Grafana"]
 
     SIM -- "MQTT · invernadero/sensores/#" --> MQ
     MQ -- "MQTT · invernadero/actuadores/#" --> SIM
@@ -48,10 +47,11 @@ flowchart LR
     NR -- "HTTP POST · webhook de alerta" --> N8N
     N8N -- "HTTP GET · /invernadero/resumen" --> NR
     N8N --> TG
-    DB --> GF
 ```
 
 **Circuito cerrado:** cuando Node-RED prende el riego, el simulador lo recibe por MQTT y la humedad del suelo empieza a subir. El sistema reacciona de verdad, no solo muestra números.
+
+Todo corre en una **VM DietPi** (VirtualBox): Mosquitto, Node-RED y MariaDB instalados con `dietpi-software`, y n8n en Docker.
 
 ---
 
@@ -63,8 +63,8 @@ flowchart LR
 | Herramienta de automatización (mín. 1) | ✅ | **Node-RED** (reglas automáticas) + **n8n** (alertas y resumen diario) |
 | Dispositivos y datos | Opcional | **Script en Python** que simula los sensores y responde a los actuadores |
 | Base de datos | ✅ | **MariaDB**: tablas `lecturas`, `eventos`, `alertas`, `configuracion` |
-| Protocolo de comunicación (mín. 1) | ✅ | **MQTT** (sensores, actuadores, control, LWT) + **HTTP** (webhook a n8n y API REST de Node-RED) |
-| Visualización | Opcional | **Grafana** (historial) + **dashboard de Node-RED** (control en vivo) |
+| Protocolo de comunicación (mín. 1) | ✅ | **MQTT** con autenticación (sensores, actuadores, control, LWT) + **HTTP** (webhook a n8n y API REST de Node-RED) |
+| Visualización | Opcional | **Dashboard 2.0 de Node-RED**: relojes, gráfico en vivo, estado y control manual |
 
 ---
 
@@ -77,22 +77,24 @@ invernadero-iot/
 │   ├── simulador_invernadero.py   # sensores simulados por MQTT
 │   └── requirements.txt
 ├── base-de-datos/
-│   └── invernadero.sql            # tablas, umbrales y usuarios
+│   └── invernadero.sql            # tablas, umbrales y usuario de Node-RED
 ├── node-red/
 │   ├── flow-logica.json           # reglas, base de datos, API, webhook
-│   └── flow-dashboard.json        # dashboard de control (node-red-dashboard)
-├── n8n/
-│   └── workflow-invernadero.json  # alertas + resumen diario por Telegram
-└── grafana/
-    ├── dashboard-invernadero.json # dashboard para importar
-    └── datasource-mysql.yaml      # (opcional) provisioning del datasource
+│   └── flow-dashboard.json        # dashboard de control (Dashboard 2.0 de FlowFuse)
+└── n8n/
+    ├── iniciar-n8n.sh             # arranca n8n en Docker
+    └── workflow-invernadero.json  # alertas + resumen diario por Telegram
 ```
+
+> **Contraseñas de laboratorio:** `invernadero123` (MQTT) y `nodered123` (MariaDB) vienen cargadas en los archivos para que el proyecto se pueda importar y probar directo en la VM. Si el sistema se usa fuera del laboratorio, hay que cambiarlas.
 
 ---
 
 ## 5. Comunicación
 
 ### Tópicos MQTT
+
+Mosquitto pide usuario y contraseña. El proyecto usa el usuario **`invernadero`**.
 
 | Tópico | Publica | Payload | Para qué |
 |---|---|---|---|
@@ -116,13 +118,11 @@ invernadero-iot/
 | `GET` | `/invernadero/estado` | Última lectura de cada sensor, estado de actuadores, modo y umbrales |
 | `GET` | `/invernadero/resumen` | Mín/máx/promedio de las últimas 24 h, cantidad de riegos, ventilaciones y alertas (consulta MariaDB) |
 
-```bash
-curl http://dietpi.local:1880/invernadero/estado
-```
+Se pueden abrir en el navegador: `http://localhost:1880/invernadero/resumen`. La casilla *Pretty-print* lo muestra ordenado.
 
 ### Webhook (Node-RED → n8n)
 
-`POST http://<host-n8n>:5678/webhook/invernadero-alerta`
+`POST http://127.0.0.1:5678/webhook/invernadero-alerta`
 
 ```json
 {
@@ -131,11 +131,13 @@ curl http://dietpi.local:1880/invernadero/estado
   "valor": 38.2,
   "umbral": 38,
   "mensaje": "🔥 Temperatura crítica en el invernadero: 38.2 °C (límite 38 °C)",
-  "fecha": "2026-10-27T19:02:23.503Z",
+  "fecha": "2026-11-23T19:02:23.503Z",
   "modo": "auto",
   "actuadores": { "riego": "OFF", "ventilador": "ON" }
 }
 ```
+
+> Se usa `127.0.0.1` y no `localhost` porque en la VM `localhost` puede resolverse a la dirección IPv6 (`::1`) y la conexión falla.
 
 ---
 
@@ -152,7 +154,7 @@ Reglas con **histéresis**: el umbral para prender es distinto del umbral para a
 |---|---|
 | 🔥 `temperatura_critica` | temperatura ≥ 38 °C |
 | 💧 `suelo_seco` | humedad del suelo ≤ 15 % (por ejemplo, si falla la bomba) |
-| ⚠️ `sensores_desconectados` | el simulador se cae (mensaje de última voluntad MQTT) |
+| ⚠️ `sensores_desconectados` | el simulador se corta (mensaje de última voluntad MQTT) |
 
 Hay **anti-spam**: como máximo una alerta del mismo tipo cada 10 minutos.
 
@@ -160,143 +162,143 @@ Todos los umbrales están en la tabla **`configuracion`**. Node-RED la vuelve a 
 
 ---
 
-## 7. Instalación paso a paso
+## 7. Instalación paso a paso (VM DietPi)
 
-> Pensado para la VM **DietPi** del curso (Mosquitto + Node-RED + MariaDB + phpMyAdmin). En los ejemplos, la VM es `dietpi.local`. Si no resuelve, usar la IP.
+**Requisitos:** VM DietPi en VirtualBox con **Mosquitto, Node-RED, MariaDB y Docker** (instalados con `dietpi-software`), y al menos **2 GB de RAM**. La memoria se cambia con la VM apagada, en *Configuración → Sistema → Placa base → Memoria base*.
 
-### 7.1 Base de datos
+Todos los comandos se corren en la terminal de la VM como `root`. Para pegar en LXTerminal se usa **Ctrl + Shift + V**.
 
-Desde la consola de la VM:
+### 7.1 Bajar el repo y lo que hace falta
 
 ```bash
-sudo mariadb < base-de-datos/invernadero.sql
+apt install -y git python3-paho-mqtt fonts-noto-color-emoji
+cd ~
+git clone https://github.com/almaanabella-harv/invernadero-iot.git
 ```
 
-O en **phpMyAdmin** → pestaña **SQL** → pegar el contenido del archivo → Continuar.
+`fonts-noto-color-emoji` hace que se vean los íconos de colores en el dashboard.
 
-Se crea la base `invernadero` con 4 tablas y dos usuarios:
+### 7.2 Base de datos
 
-- `nodered` / `nodered123`: lectura y escritura
-- `grafana` / `grafana123`: solo lectura
+```bash
+mariadb -u root -p < ~/invernadero-iot/base-de-datos/invernadero.sql
+mariadb -u root -p -e "SHOW TABLES FROM invernadero;"
+```
 
-### 7.2 Node-RED
+Pide la contraseña de `root` de MariaDB. Se crean la base `invernadero` con sus 4 tablas y el usuario `nodered` / `nodered123`, que usa Node-RED.
 
-1. **Menú ☰ → Manage palette → Install** e instalar:
+### 7.3 Usuario de Mosquitto
+
+El Mosquitto de DietPi no acepta conexiones sin usuario. Creamos uno para el proyecto:
+
+```bash
+mosquitto_passwd -b /etc/mosquitto/passwd invernadero invernadero123
+systemctl restart mosquitto
+systemctl is-active mosquitto      # tiene que decir: active
+```
+
+> El aviso *"File /etc/mosquitto/passwd group is not root"* es normal. **No cambiar los permisos del archivo**: si se cambian, Mosquitto puede dejar de leerlo.
+
+### 7.4 Node-RED
+
+1. Abrir `http://localhost:1880`.
+2. **☰ → Manage palette → Install** e instalar, si no están:
    - `node-red-node-mysql`
-   - `node-red-dashboard`
-2. **Menú ☰ → Import** → pegar `node-red/flow-logica.json` → Import.
-3. Repetir con `node-red/flow-dashboard.json`.
-4. Abrir el nodo de configuración **MariaDB invernadero**: host `127.0.0.1`, base `invernadero`, usuario `nodered`, contraseña `nodered123`. Debería venir cargado; verificarlo igual.
-5. **Deploy**.
+   - `@flowfuse/node-red-dashboard` (Dashboard 2.0)
+3. **☰ → Import → select a file to import**. En la ventana de archivos, **Ctrl + L**, escribir `/root/invernadero-iot/node-red/` e importar **`flow-logica.json`**.
+4. Repetir con **`flow-dashboard.json`**.
+5. **Deploy**. Si avisa de nodos mal configurados en *otros* flows, **Confirm deploy**.
 
-Si todo está bien, los nodos mysql muestran **connected** en verde. El dashboard queda en `http://dietpi.local:1880/ui`.
+Los nodos morados (MQTT) y el de MariaDB tienen que decir **connected** en verde. El usuario y la contraseña ya vienen en los flows. Si algún nodo MQTT queda en *connecting*: doble clic en el nodo → lápiz ✏️ al lado de *Server* → pestaña **Security** → usuario `invernadero`, contraseña `invernadero123`.
 
-> **URL de n8n:** por defecto Node-RED manda las alertas a `http://localhost:5678/webhook/invernadero-alerta`, o sea, n8n en la misma VM. Si n8n corre en la PC, abrir el nodo **"Preparar alerta"** y cambiar `localhost` por la IP de la PC.
+El dashboard queda en **`http://localhost:1880/dashboard/invernadero`**. Si Node-RED ya tenía un dashboard, la página "Invernadero" se suma a ese, sin duplicarlo.
 
-### 7.3 n8n
+### 7.5 n8n (en Docker)
 
-**Instalarlo** (cualquiera de las tres opciones):
+n8n corre en Docker porque con Node.js 26, que es el que trae la VM, `npm install -g n8n` falla al compilar un módulo interno.
 
 ```bash
-npx n8n                       # en la PC con Node.js 20 o superior
-# o
-sudo npm install -g n8n && n8n start      # en la VM
-# o con Docker
-docker run -it --rm -p 5678:5678 -v n8n_data:/home/node/.n8n docker.n8n.io/n8nio/n8n
+sh ~/invernadero-iot/n8n/iniciar-n8n.sh
+docker logs -f n8n
 ```
 
-Abrir `http://localhost:5678` y crear el usuario.
+Cuando aparezca *"Editor is now accessible via…"*, apretar **Ctrl + C** (n8n sigue andando), abrir `http://localhost:5678` y crear el usuario.
 
-**Bot de Telegram:**
+### 7.6 Bot de Telegram
 
-1. En Telegram, hablarle a **@BotFather** → `/newbot` → copiar el **token**.
+1. En Telegram (sirve Telegram Web en la VM: `https://web.telegram.org`), hablarle a **@BotFather** → `/newbot` → copiar el **token**. No compartirlo.
 2. Mandarle cualquier mensaje al bot nuevo.
-3. Abrir `https://api.telegram.org/bot<TOKEN>/getUpdates` y copiar el número de `"chat":{"id": ... }`.
+3. Abrir `https://api.telegram.org/bot<TOKEN>/getUpdates` y anotar el número de `"chat":{"id": ... }`. Si sale vacío, mandar otro mensaje y recargar. También se consigue escribiéndole a **@userinfobot**.
 
-**Importar el workflow:**
+### 7.7 Workflow de n8n
 
-1. **Workflows → ⋯ → Import from file** → `n8n/workflow-invernadero.json`.
-2. En los dos nodos de Telegram: crear la credencial con el token y reemplazar `PONER_TU_CHAT_ID` por el chat id.
-3. Si n8n **no** está en la misma máquina que Node-RED, cambiar la URL del nodo **"Pedir resumen a Node-RED"** a `http://dietpi.local:1880/invernadero/resumen`.
-4. **Guardar y activar** el workflow (switch *Active*). La URL `/webhook/...` solo funciona con el workflow activo. Mientras se prueba en el editor, n8n usa `/webhook-test/...`.
+1. Crear un workflow nuevo → **⋯ → Import from File…** → `/root/invernadero-iot/n8n/workflow-invernadero.json`.
+2. Nodo **Telegram: enviar alerta** → **Set up credential** → pegar el token en *Access Token* → **Save**. En **Chat ID** reemplazar `PONER_TU_CHAT_ID` por el número del paso anterior.
+3. Nodo **Telegram: enviar resumen** → elegir la misma credencial y poner el mismo Chat ID.
+4. **Ctrl + S** y **Publish**. Sin publicar, el webhook de alertas no funciona.
+5. Probar con el botón **Execute workflow from Todos los días 20:00**: llega el resumen a Telegram.
 
-> ¿Sin Telegram? Se pueden reemplazar los nodos de Telegram por Gmail, Email (SMTP) o Discord. El resto del workflow no cambia.
-
-### 7.4 Grafana
-
-1. Instalar Grafana: en DietPi, desde `dietpi-software`. Suele quedar en el puerto **3001**; en una instalación estándar es el 3000.
-2. **Connections → Data sources → Add → MySQL**:
-   - Host: `localhost:3306`
-   - Database: `invernadero`
-   - User: `grafana`
-   - Password: `grafana123`
-   - **Save & test**
-
-   También se puede usar `grafana/datasource-mysql.yaml` como provisioning.
-3. **Dashboards → New → Import** → subir `grafana/dashboard-invernadero.json` → elegir el datasource → Import.
-
-### 7.5 Simulador
-
-En la PC o en la VM, con Python 3:
+### 7.8 Simulador
 
 ```bash
-cd simulador
-pip install -r requirements.txt
-python simulador_invernadero.py --broker dietpi.local
+python3 ~/invernadero-iot/simulador/simulador_invernadero.py --usuario invernadero --clave invernadero123
 ```
 
-Opciones útiles:
+Tiene que decir `[MQTT] Conectado al broker` y mostrar una línea cada 5 s. La terminal queda ocupada: para otros comandos, abrir otra pestaña con **File → New Tab**.
 
 | Opción | Default | Qué hace |
 |---|---|---|
+| `--usuario` / `--clave` | — | usuario de Mosquitto (obligatorio en DietPi) |
 | `--broker` | `localhost` | host o IP de Mosquitto |
 | `--escenario` | `normal` | `normal`, `ola_calor`, `sequia`, `falla_riego` |
 | `--intervalo` | `5` | segundos reales entre lecturas |
 | `--minutos-por-tick` | `10` | minutos simulados por lectura. Con los defaults, **un día dura 12 minutos** |
-| `--usuario` / `--clave` | — | si Mosquitto pide usuario |
 
 ---
 
 ## 8. Guion para la demo
 
-1. **Arranque.** Correr el simulador en escenario `normal` y mostrar en pantalla:
-   - el dashboard de Node-RED,
-   - Grafana,
-   - la tabla `lecturas` en phpMyAdmin llenándose.
-2. **Riego automático.** Cuando la humedad del suelo baja de 30 %, Node-RED prende el riego solo. Se ve en:
-   - el dashboard,
+1. **Arranque.** Simulador corriendo, dashboard abierto (`/dashboard/invernadero`) y la tabla `lecturas` en phpMyAdmin llenándose.
+2. **Riego automático.** Cuando la humedad del suelo baja de 30 %, Node-RED prende el riego solo, y cuando pasa 60 % lo apaga. Se ve en:
+   - el gráfico en vivo, con forma de "serrucho",
+   - el estado del dashboard,
    - la consola del simulador (`>> Riego ENCENDIDO`),
-   - el timeline de Grafana,
    - la tabla `eventos`, con el motivo.
-3. **Ola de calor.** En el dashboard, *Escenario → Ola de calor*. Se prende la ventilación y, si pasa los 38 °C, llega la **alerta 🔥 a Telegram**.
-4. **Falla de la bomba.** Escenario *Falla de la bomba de riego*: el riego se prende pero no moja. El suelo baja hasta 15 % y llega la **alerta 💧**.
+3. **Ola de calor.** Dashboard → *Escenario → Ola de calor*. Se prende la ventilación y, si pasa 38 °C, llega la **alerta 🔥 a Telegram**.
+4. **Falla de la bomba.** Escenario *Falla de la bomba de riego*: el riego se prende pero no moja, el suelo baja a 15 % y llega la **alerta 💧**.
 5. **Modo manual.** Activar *Modo manual* y usar los botones Regar / Ventilar.
-6. **Corte de sensores.** Cerrar el simulador. El broker publica la **última voluntad** y llega la **alerta ⚠️**.
+6. **Corte de sensores.** Cortar el simulador con Ctrl + C: llega la **alerta ⚠️** por la última voluntad MQTT. Después volver a arrancarlo.
 7. **Resumen y API.**
-   - En n8n, ejecutar a mano el nodo *Todos los días 20:00* para mandar el resumen del día.
-   - Mostrar `curl .../invernadero/estado`.
-8. **Umbrales editables.** En phpMyAdmin, cambiar `temp_max` en `configuracion`. En menos de 30 s el sistema usa el nuevo valor.
+   - En n8n, **Execute workflow from Todos los días 20:00**: llega el resumen del día a Telegram.
+   - Mostrar `http://localhost:1880/invernadero/resumen` con *Pretty-print*.
+8. **Umbrales editables.** En phpMyAdmin, cambiar `temp_max` en `configuracion`. En menos de 30 s el sistema usa el valor nuevo.
 
-> Para la demo conviene bajar `alerta_minutos` a `1` en la tabla `configuracion`, así las alertas se repiten rápido.
+> Para la demo conviene bajar `alerta_minutos` a `1` en la tabla `configuracion`, así las alertas del mismo tipo se pueden repetir rápido.
 
 ---
 
-## 9. Problemas comunes
+## 9. Problemas que tuvimos y cómo se resuelven
 
 | Síntoma | Solución |
 |---|---|
-| El simulador no conecta al broker desde la PC | Mosquitto 2.x solo acepta conexiones locales por defecto. Agregar en `/etc/mosquitto/conf.d/local.conf` las líneas `listener 1883` y `allow_anonymous true`, y reiniciar con `sudo systemctl restart mosquitto`. También se puede correr el simulador dentro de la VM. |
-| Nodo mysql en rojo: *Access denied* | Revisar usuario y contraseña en el nodo de configuración **MariaDB invernadero**. |
-| `/invernadero/resumen` devuelve error 500 | MariaDB no está conectada (ver la fila anterior). |
-| No llegan alertas a n8n | El workflow tiene que estar **activo**. Revisar la URL en el nodo "Preparar alerta". El anti-spam espera 10 min entre alertas del mismo tipo. |
+| Simulador: *"El broker rechazó la conexión (Not authorized)"* | Falta usuario o contraseña. Crear el usuario (7.3) y correr con `--usuario invernadero --clave invernadero123`. Las líneas con *SIN CONEXIÓN* no llegaron al broker. |
+| Nodos MQTT de Node-RED en *connecting* | Pestaña **Security** del broker con el usuario de Mosquitto (7.4) y **Deploy**. |
+| MariaDB: *Access denied for user 'root'* | Usar `mariadb -u root -p` y escribir la contraseña. |
+| `npm install -g n8n` falla (`kafka-javascript`, `node-pre-gyp`) | La VM tiene Node.js 26. Usar n8n en Docker (7.5). |
+| Docker: *"The container name /n8n is already in use"* | `docker rm -f n8n` y volver a crearlo (el script ya lo hace). |
+| n8n: *"port 5678 is already in use"* | Hay otro n8n andando. `docker ps -a` para verlo y apagarlo, por ejemplo: `docker stop docker-n8n-1 docker-postgres-1` y `docker update --restart=no docker-n8n-1 docker-postgres-1`. |
+| n8n: *"The service refused the connection"* | Usar `127.0.0.1` en vez de `localhost` en la URL (ya viene así en el workflow). |
+| No llegan alertas a Telegram | El workflow tiene que estar **publicado**. Revisar el panel *Debug* de Node-RED (*Respuesta de n8n*) y la pestaña *Executions* de n8n. El anti-spam espera 10 min entre alertas del mismo tipo. |
+| `getUpdates` devuelve `"result":[]` | Mandarle otro mensaje al bot y recargar. Con `.../getMe` se confirma que el token es de ese bot. |
+| En el dashboard aparecen **▯** en vez de los íconos | `apt install -y fonts-noto-color-emoji` y reabrir Chromium. |
 | Los botones del dashboard no hacen nada | Primero hay que pasar a **Modo manual**. En automático, Node-RED ignora los comandos y lo avisa en el panel de debug. |
-| Grafana dice *No data* | Revisar el rango de tiempo (arriba a la derecha) y que el datasource apunte a la base `invernadero`. |
 
 ---
 
 ## 10. Posibles mejoras
 
 - **Hardware real:** un ESP32 con ESPHome o Tasmota que publique en los mismos tópicos `invernadero/sensores/...` reemplaza al simulador sin cambiar nada más del sistema.
-- Usuario y contraseña en Mosquitto, y TLS.
+- TLS en Mosquitto y contraseñas propias por dispositivo.
 - Pronóstico del clima por API en n8n para regar menos si va a llover.
 - Varios invernaderos: agregar un nivel al tópico (`invernadero/<id>/sensores/...`) y una columna `invernadero_id` en las tablas.
+- Grafana para análisis histórico de largo plazo.
